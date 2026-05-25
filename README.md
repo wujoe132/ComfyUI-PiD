@@ -37,7 +37,7 @@ Clone this custom node into ComfyUI:
 
 ```bash
 cd ComfyUI/custom_nodes
-git clone <your-repo-url> ComfyUI-PiD
+git clone https://github.com/Merserk/ComfyUI-PiD.git
 ```
 
 Install Python dependencies if your ComfyUI launcher or ComfyUI Manager does not do it automatically:
