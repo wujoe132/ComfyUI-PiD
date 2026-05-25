@@ -68,16 +68,15 @@ class PiDAutoSettings:
         return {
             "required": {
                 "latent": ("LATENT",),
-                "backbone": (AUTO_BACKBONE_CHOICES, {"default": "auto"}),
-                "preset": (PRESET_CHOICES, {"default": "balanced"}),
+                "backbone": ("COMBO", {"options": AUTO_BACKBONE_CHOICES, "default": "auto"}),
+                "preset": ("COMBO", {"options": PRESET_CHOICES, "default": "balanced"}),
                 "base_width": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 8}),
                 "base_height": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 8}),
             }
         }
 
-    RETURN_TYPES = ("PID_SETTINGS", "STRING", "STRING", "INT", "INT", "FLOAT", "FLOAT", "STRING")
+    RETURN_TYPES = ("COMBO", "COMBO", "INT", "INT", "FLOAT", "FLOAT", "STRING")
     RETURN_NAMES = (
-        "auto_settings",
         "backbone",
         "pid_ckpt_type",
         "pid_steps",
@@ -144,7 +143,6 @@ class PiDAutoSettings:
         if notes:
             status += "\n" + "\n".join(notes)
         return (
-            settings,
             str(settings["backbone"]),
             str(settings["pid_ckpt_type"]),
             int(settings["pid_steps"]),

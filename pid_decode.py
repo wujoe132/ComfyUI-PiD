@@ -690,9 +690,9 @@ class PiDDecode:
         return {
             "required": {
                 "latent": ("LATENT",),
-                "prompt": ("STRING", {"multiline": True, "default": ""}),
-                "backbone": (BACKBONE_CHOICES, {"default": "zimage"}),
-                "pid_ckpt_type": (["2k", "2kto4k"], {"default": "2k"}),
+                "caption": ("STRING", {"forceInput": True}),
+                "backbone": ("COMBO", {"options": BACKBONE_CHOICES, "default": "zimage"}),
+                "pid_ckpt_type": ("COMBO", {"options": ["2k", "2kto4k"], "default": "2k"}),
                 "pid_steps": ("INT", {"default": 4, "min": 1, "max": 64, "step": 1}),
                 "scale": ("INT", {"default": 0, "min": 0, "max": 8, "step": 1}),
                 "cfg_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 20.0, "step": 0.1}),
@@ -703,14 +703,6 @@ class PiDDecode:
                 "aggressive_cleanup": ("BOOLEAN", {"default": True}),
             },
             "optional": {
-                "auto_settings": ("PID_SETTINGS",),
-                "backbone_in": ("STRING", {"forceInput": True}),
-                "pid_ckpt_type_in": ("STRING", {"forceInput": True}),
-                "pid_steps_in": ("INT", {"forceInput": True}),
-                "scale_in": ("INT", {"forceInput": True}),
-                "cfg_scale_in": ("FLOAT", {"forceInput": True}),
-                "sigma_in": ("FLOAT", {"forceInput": True}),
-                "caption": ("STRING", {"forceInput": True}),
                 "vae": ("VAE",),
                 "pid_source_dir": ("STRING", {"default": "", "multiline": False}),
                 "baseline_image": ("IMAGE",),
@@ -725,7 +717,7 @@ class PiDDecode:
     def decode(
         self,
         latent,
-        prompt: str,
+        caption: str,
         backbone: str,
         pid_ckpt_type: str,
         pid_steps: int,
@@ -736,40 +728,12 @@ class PiDDecode:
         auto_download: bool,
         unload_comfy_before_pid: bool = True,
         aggressive_cleanup: bool = True,
-        auto_settings=None,
-        backbone_in: str = "",
-        pid_ckpt_type_in: str = "",
-        pid_steps_in=None,
-        scale_in=None,
-        cfg_scale_in=None,
-        sigma_in=None,
-        caption: str = "",
         vae=None,
         pid_source_dir: str = "",
         baseline_image=None,
     ):
-        if isinstance(auto_settings, dict):
-            backbone = auto_settings.get("backbone", backbone)
-            pid_ckpt_type = auto_settings.get("pid_ckpt_type", pid_ckpt_type)
-            pid_steps = int(auto_settings.get("pid_steps", pid_steps))
-            scale = int(auto_settings.get("scale", scale))
-            cfg_scale = float(auto_settings.get("cfg_scale", cfg_scale))
-            sigma = float(auto_settings.get("sigma", sigma))
-            unload_comfy_before_pid = bool(auto_settings.get("unload_comfy_before_pid", unload_comfy_before_pid))
-            aggressive_cleanup = bool(auto_settings.get("aggressive_cleanup", aggressive_cleanup))
-
-        if backbone_in:
-            backbone = str(backbone_in)
-        if pid_ckpt_type_in:
-            pid_ckpt_type = str(pid_ckpt_type_in)
-        if pid_steps_in is not None:
-            pid_steps = int(pid_steps_in)
-        if scale_in is not None:
-            scale = int(scale_in)
-        if cfg_scale_in is not None:
-            cfg_scale = float(cfg_scale_in)
-        if sigma_in is not None:
-            sigma = float(sigma_in)
+        backbone = str(backbone).strip()
+        pid_ckpt_type = str(pid_ckpt_type).strip()
 
         if backbone not in PID_BACKBONES:
             raise PiDNodeError(f"Unknown backbone={backbone!r}; expected one of {BACKBONE_CHOICES}")
@@ -827,7 +791,7 @@ class PiDDecode:
         latent_bf16 = samples.to(device=device, dtype=torch.bfloat16)
         baseline_neg1_1 = (baseline_01.to(device=device, dtype=torch.bfloat16) * 2.0) - 1.0
 
-        caption = caption if caption else (prompt or "")
+        caption = caption or ""
         data_batch = {
             model.config.input_caption_key: [caption] * int(b),
             "LQ_video_or_image": baseline_neg1_1,

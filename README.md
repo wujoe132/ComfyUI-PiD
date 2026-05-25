@@ -92,15 +92,16 @@ PiD Text Prompt caption -> PiD Decode caption
 
 sampler LATENT
         -> PiD Auto Settings
-        -> PiD Decode auto_settings
+        -> PiD Decode settings widgets
 
-Optional visible wiring:
-PiD Auto Settings backbone -> PiD Decode backbone_in
-PiD Auto Settings pid_ckpt_type -> PiD Decode pid_ckpt_type_in
-PiD Auto Settings pid_steps -> PiD Decode pid_steps_in
-PiD Auto Settings scale -> PiD Decode scale_in
-PiD Auto Settings cfg_scale -> PiD Decode cfg_scale_in
-PiD Auto Settings sigma -> PiD Decode sigma_in
+You can keep PiD Decode settings as normal widgets, or convert those widgets to inputs and connect:
+
+PiD Auto Settings backbone -> PiD Decode backbone
+PiD Auto Settings pid_ckpt_type -> PiD Decode pid_ckpt_type
+PiD Auto Settings pid_steps -> PiD Decode pid_steps
+PiD Auto Settings scale -> PiD Decode scale
+PiD Auto Settings cfg_scale -> PiD Decode cfg_scale
+PiD Auto Settings sigma -> PiD Decode sigma
 
 sampler LATENT
         + matching ComfyUI VAE
@@ -121,8 +122,8 @@ base_width = 0
 base_height = 0
 
 PiD Decode:
-connect auto_settings from PiD Auto Settings, or connect the individual settings outputs
 connect caption from PiD Text Prompt
+set PiD settings manually, or convert settings widgets to inputs and connect PiD Auto Settings
 auto_download = true
 ```
 
