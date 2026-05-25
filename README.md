@@ -14,6 +14,7 @@ The node can create the baseline through a connected ComfyUI `VAE`, or you can c
 
 - **PiD Decode**: decodes a PiD-supported latent and outputs `IMAGE`.
 - **PiD Auto Settings**: reads a latent shape and produces recommended decode settings for **PiD Decode**.
+- **PiD Text Prompt**: one prompt box with outputs for both CLIP text encoding and PiD caption conditioning.
 
 There are no separate setup/download/unload nodes. PiD source, checkpoints, and required asset files are prepared lazily when **PiD Decode** runs with `auto_download=true`.
 
@@ -86,6 +87,9 @@ $env:HF_TOKEN = "hf_your_token_here"
 For Z-Image/Flux-style workflows:
 
 ```text
+PiD Text Prompt text -> CLIP Text Encode
+PiD Text Prompt caption -> PiD Decode caption
+
 sampler LATENT
         -> PiD Auto Settings
         -> PiD Decode auto_settings
@@ -110,6 +114,7 @@ base_height = 0
 
 PiD Decode:
 connect auto_settings from PiD Auto Settings
+connect caption from PiD Text Prompt
 auto_download = true
 ```
 

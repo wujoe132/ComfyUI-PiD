@@ -704,6 +704,7 @@ class PiDDecode:
             },
             "optional": {
                 "auto_settings": ("PID_SETTINGS",),
+                "caption": ("STRING", {"forceInput": True}),
                 "vae": ("VAE",),
                 "pid_source_dir": ("STRING", {"default": "", "multiline": False}),
                 "baseline_image": ("IMAGE",),
@@ -730,6 +731,7 @@ class PiDDecode:
         unload_comfy_before_pid: bool = True,
         aggressive_cleanup: bool = True,
         auto_settings=None,
+        caption: str = "",
         vae=None,
         pid_source_dir: str = "",
         baseline_image=None,
@@ -800,7 +802,7 @@ class PiDDecode:
         latent_bf16 = samples.to(device=device, dtype=torch.bfloat16)
         baseline_neg1_1 = (baseline_01.to(device=device, dtype=torch.bfloat16) * 2.0) - 1.0
 
-        caption = prompt or ""
+        caption = caption if caption else (prompt or "")
         data_batch = {
             model.config.input_caption_key: [caption] * int(b),
             "LQ_video_or_image": baseline_neg1_1,
