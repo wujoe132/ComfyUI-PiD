@@ -13,6 +13,7 @@ The node can create the baseline through a connected ComfyUI `VAE`, or you can c
 ## Node
 
 - **PiD Decode**: decodes a PiD-supported latent and outputs `IMAGE`.
+- **PiD Auto Settings**: reads a latent shape and produces recommended decode settings for **PiD Decode**.
 
 There are no separate setup/download/unload nodes. PiD source, checkpoints, and required asset files are prepared lazily when **PiD Decode** runs with `auto_download=true`.
 
@@ -86,6 +87,10 @@ For Z-Image/Flux-style workflows:
 
 ```text
 sampler LATENT
+        -> PiD Auto Settings
+        -> PiD Decode auto_settings
+
+sampler LATENT
         + matching ComfyUI VAE
         + positive prompt text
         -> PiD Decode
@@ -97,14 +102,25 @@ For backbones where the matching VAE is not available as a ComfyUI `VAE`, connec
 Recommended first test settings:
 
 ```text
-backbone = zimage
-pid_ckpt_type = 2k
-pid_steps = 4
-scale = 1 or 2 first; use 0/4 later if you have enough VRAM
-cfg_scale = 1.0
-sigma = 0.0
+PiD Auto Settings:
+backbone = auto
+preset = balanced
+base_width = 0
+base_height = 0
+
+PiD Decode:
+connect auto_settings from PiD Auto Settings
 auto_download = true
 ```
+
+`base_width=0` and `base_height=0` mean the settings node estimates the pixel size from the latent tensor. Set them manually only when your workflow uses unusual latent scaling.
+
+Presets:
+
+- `safe`: lower VRAM, smaller output.
+- `balanced`: good first choice.
+- `quality`: higher output when the latent size and checkpoint support it.
+- `4k`: asks for the largest official scale; use on high-VRAM GPUs.
 
 ## Notes
 

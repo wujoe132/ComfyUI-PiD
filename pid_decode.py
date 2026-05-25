@@ -703,6 +703,7 @@ class PiDDecode:
                 "aggressive_cleanup": ("BOOLEAN", {"default": True}),
             },
             "optional": {
+                "auto_settings": ("PID_SETTINGS",),
                 "vae": ("VAE",),
                 "pid_source_dir": ("STRING", {"default": "", "multiline": False}),
                 "baseline_image": ("IMAGE",),
@@ -728,10 +729,21 @@ class PiDDecode:
         auto_download: bool,
         unload_comfy_before_pid: bool = True,
         aggressive_cleanup: bool = True,
+        auto_settings=None,
         vae=None,
         pid_source_dir: str = "",
         baseline_image=None,
     ):
+        if isinstance(auto_settings, dict):
+            backbone = auto_settings.get("backbone", backbone)
+            pid_ckpt_type = auto_settings.get("pid_ckpt_type", pid_ckpt_type)
+            pid_steps = int(auto_settings.get("pid_steps", pid_steps))
+            scale = int(auto_settings.get("scale", scale))
+            cfg_scale = float(auto_settings.get("cfg_scale", cfg_scale))
+            sigma = float(auto_settings.get("sigma", sigma))
+            unload_comfy_before_pid = bool(auto_settings.get("unload_comfy_before_pid", unload_comfy_before_pid))
+            aggressive_cleanup = bool(auto_settings.get("aggressive_cleanup", aggressive_cleanup))
+
         if backbone not in PID_BACKBONES:
             raise PiDNodeError(f"Unknown backbone={backbone!r}; expected one of {BACKBONE_CHOICES}")
         backbone_info = PID_BACKBONES[backbone]
@@ -834,12 +846,8 @@ class PiDDecode:
 
 NODE_CLASS_MAPPINGS = {
     "PiDDecode": PiDDecode,
-    # Backward-compatible class id for existing Z-Image workflows. It now exposes
-    # the generalized backbone selector and defaults to zimage.
-    "PiDZImageDecode": PiDDecode,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "PiDDecode": "PiD Decode",
-    "PiDZImageDecode": "PiD Decode",
 }
