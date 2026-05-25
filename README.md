@@ -68,58 +68,6 @@ KSampler LATENT -> PiD Decode latent
 PiD Decode vae and baseline_image disconnected
 ```
 
-## Registry Metadata
-
-This repository is ready for Comfy Registry publishing. It includes:
-
-- `pyproject.toml` with `PublisherId = "merserk"` and `DisplayName = "ComfyUI-PiD"`
-- MIT `LICENSE`
-- `.comfyignore`
-- optional GitHub Actions workflow at `.github/workflows/publish_action.yml`
-
-Manual publish:
-
-```bash
-python -m pip install comfy-cli
-comfy node publish
-```
-
-GitHub Actions publish: add a repository secret named `REGISTRY_ACCESS_TOKEN` containing your Comfy Registry API key, then run the workflow manually or bump `version` in `pyproject.toml` and push to `main`.
-
-## Automatic Downloads
-
-With `auto_download=true`, **PiD Decode** will:
-
-1. Clone NVIDIA's PiD source into `vendor/PiD` if it is missing.
-2. Download the selected PiD checkpoint from `nvidia/PiD`.
-3. Download the extra tokenizer/VAE assets needed by the selected backbone.
-
-For Flux/Z-Image, the node first tries to copy your existing:
-
-```text
-ComfyUI/models/vae/ae.safetensors
-```
-
-to:
-
-```text
-ComfyUI/custom_nodes/ComfyUI-PiD/vendor/PiD/checkpoints/ae.safetensors
-```
-
-If no local file is found, it downloads `checkpoints/ae.safetensors` from `nvidia/PiD`.
-
-If Hugging Face requires a token, set one before starting ComfyUI:
-
-```bash
-export HF_TOKEN=hf_your_token_here
-```
-
-Windows PowerShell:
-
-```powershell
-$env:HF_TOKEN = "hf_your_token_here"
-```
-
 ## Basic Workflow
 
 For Z-Image/Flux-style workflows:
