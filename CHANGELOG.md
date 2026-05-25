@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2
+
+- Kept a single staged **PiD Sample** node and made it use the subprocess sampler internally.
+- Removed the duplicate **PiD Sample (Subprocess)** node mapping.
+- Added lower-VRAM PiD sampling behavior: no required baseline for official latent-conditioned checkpoints, post-caption text/VAE offload, and lazy LQ feature projection.
+
 ## 0.2.1
 
 - Changed **PiD Sample** to run the heavy PiD sampling stage in a separate Python process so the main ComfyUI process does not need to hold the PiD CUDA context during sampling.

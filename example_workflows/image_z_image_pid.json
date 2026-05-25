@@ -496,7 +496,7 @@
       ],
       "properties": {
         "cnr_id": "comfyui-pid",
-        "ver": "093723cc9702c2ec7f09d900072c1636a082714c",
+        "ver": "0.2.2",
         "Node name for S&R": "PiDTextPrompt",
         "aux_id": "Merserk/ComfyUI-PiD"
       },
@@ -656,7 +656,7 @@
       ],
       "properties": {
         "cnr_id": "comfyui-pid",
-        "ver": "0.2.0",
+        "ver": "0.2.2",
         "Node name for S&R": "PiDPrepare"
       },
       "widgets_values": [
@@ -701,7 +701,7 @@
       ],
       "properties": {
         "cnr_id": "comfyui-pid",
-        "ver": "0.2.0",
+        "ver": "0.2.2",
         "Node name for S&R": "PiDFinalize"
       },
       "widgets_values": []
@@ -738,7 +738,7 @@
       ],
       "properties": {
         "cnr_id": "comfyui-pid",
-        "ver": "0.2.1",
+        "ver": "0.2.2",
         "Node name for S&R": "PiDSample"
       },
       "widgets_values": [
