@@ -1,10 +1,13 @@
 # Changelog
 
-## Precision safety update
+## Sequential block offload build
 
-- Kept the `precision` setting but limited it to `bf16` and `fp16`.
-- Removed the FP8 options because PiD cannot run through normal PyTorch modules with a simple float8 cast.
-- `bf16` remains the default. `fp16` is the only experimental lower-VRAM option in this build.
+- Based on the pre-FP8 GitHub-ready build. No FP8/float8 precision modes are included.
+- Added optional `sequential_offload` setting to **PiD Decode**:
+  - `disabled` keeps the previous behavior.
+  - `sequential_blocks` CPU-offloads the detected largest PiD/DiT block stack and moves one block to CUDA only while it runs.
+  - `sequential_blocks_aggressive` does the same and also clears CUDA cache after each block.
+- The new setting is added after `pid_source_dir` to avoid shifting old required widget values as much as possible.
 
 ## GitHub/Registry ready build
 

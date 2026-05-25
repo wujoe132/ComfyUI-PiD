@@ -164,7 +164,7 @@ PID_BACKBONES: Dict[str, PiDBackbone] = {
 }
 
 BACKBONE_CHOICES = list(PID_BACKBONES.keys())
-PRECISION_CHOICES = ["bf16", "fp16"]
+SEQUENTIAL_OFFLOAD_CHOICES = ["disabled", "sequential_blocks", "sequential_blocks_aggressive"]
 
 _MODEL_CACHE: Dict[Tuple[str, str, str, str, str, bool, str], object] = {}
 
@@ -567,35 +567,6 @@ def _import_pid_loader(pid_dir: Path):
     return load_model_from_checkpoint
 
 
-def _model_dtype_for_precision(precision: str):
-    precision = str(precision or "bf16").strip().lower()
-    if precision == "bf16":
-        return torch.bfloat16
-    if precision == "fp16":
-        return torch.float16
-    raise PiDNodeError(
-        f"Unknown precision={precision!r}; expected one of {PRECISION_CHOICES}"
-    )
-
-
-def _activation_dtype_for_precision(precision: str):
-    # Use the same compute dtype as the model. Native PyTorch float8 cannot be
-    # used as a drop-in compute dtype for PiD, so the node only exposes bf16/fp16.
-    return _model_dtype_for_precision(precision)
-
-
-def _apply_model_precision(model, precision: str):
-    precision = str(precision or "bf16").strip().lower()
-    target_dtype = _model_dtype_for_precision(precision)
-    try:
-        model = model.to(dtype=target_dtype)
-    except Exception as exc:
-        raise PiDNodeError(
-            f"Could not cast PiD model to precision={precision!r}. Original error: {exc}"
-        ) from exc
-    return model
-
-
 def _load_pid_model(
     pid_dir: Path,
     backbone: str,
@@ -634,7 +605,6 @@ def _load_pid_model(
             strict=False,
             load_ema_to_reg=load_ema_to_reg,
         )
-    model = _apply_model_precision(model, dtype_choice)
     model.eval()
     _MODEL_CACHE[cache_key] = model
     return model
@@ -657,6 +627,131 @@ def _unload_pid_model(model: object, aggressive: bool = True) -> None:
     except Exception:
         pass
     _free_cuda_memory(aggressive=aggressive)
+
+
+
+class _SequentialBlockOffloader:
+    """Best-effort sequential CPU offload for PiD's largest DiT block stack.
+
+    This keeps the non-block parts of PiD on CUDA, moves the detected transformer
+    blocks to CPU, and transfers one block to CUDA only for its own forward call.
+    It is intentionally conservative and opt-in because it is much slower than
+    keeping all blocks resident on the GPU.
+    """
+
+    def __init__(self, model, mode: str, device: str = "cuda"):
+        self.model = model
+        self.mode = str(mode or "disabled").strip().lower()
+        self.device = device
+        self.aggressive = self.mode == "sequential_blocks_aggressive"
+        self.handles = []
+        self.blocks = []
+        self.container_name = ""
+        if self.mode == "disabled":
+            return
+        if self.mode not in SEQUENTIAL_OFFLOAD_CHOICES:
+            raise PiDNodeError(
+                f"Unknown sequential_offload={self.mode!r}; expected one of {SEQUENTIAL_OFFLOAD_CHOICES}"
+            )
+        self.blocks, self.container_name = self._find_largest_block_stack(model)
+        if not self.blocks:
+            raise PiDNodeError(
+                "Sequential block offload could not find a transformer/DiT block stack in the loaded PiD model. "
+                "Set sequential_offload=disabled for this model."
+            )
+        self._install()
+
+    @staticmethod
+    def _module_param_count(module) -> int:
+        try:
+            return sum(int(p.numel()) for p in module.parameters(recurse=True))
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _children(module):
+        try:
+            return list(module.children())
+        except Exception:
+            return []
+
+    def _find_largest_block_stack(self, model):
+        candidates = []
+        for name, module in model.named_modules():
+            children = self._children(module)
+            if len(children) < 4:
+                continue
+            cls_name = module.__class__.__name__.lower()
+            name_l = str(name).lower()
+            child_classes = " ".join(c.__class__.__name__.lower() for c in children[:8])
+            looks_like_blocks = (
+                "blocks" in name_l
+                or "block" in cls_name
+                or "block" in child_classes
+                or "transformer" in name_l
+                or "dit" in name_l
+            )
+            if not looks_like_blocks:
+                continue
+            child_param_counts = [self._module_param_count(c) for c in children]
+            total_params = sum(child_param_counts)
+            # Avoid tiny helper containers; a real PiD block stack is large.
+            if total_params < 10_000_000:
+                continue
+            candidates.append((total_params, name or module.__class__.__name__, children))
+
+        if not candidates:
+            return [], ""
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        _total, name, blocks = candidates[0]
+        return blocks, name
+
+    def _install(self) -> None:
+        # Move selected blocks to CPU before the sample loop starts.  The hooks
+        # bring each block back only for its own forward pass.
+        for block in self.blocks:
+            try:
+                block.to("cpu")
+            except Exception:
+                pass
+        _free_cuda_memory(aggressive=self.aggressive)
+
+        for block in self.blocks:
+            self.handles.append(block.register_forward_pre_hook(self._pre_forward))
+            self.handles.append(block.register_forward_hook(self._post_forward))
+
+    def _pre_forward(self, module, inputs):
+        try:
+            module.to(self.device)
+        except Exception as exc:
+            raise PiDNodeError(f"Sequential block offload failed moving a PiD block to CUDA: {exc}") from exc
+        return None
+
+    def _post_forward(self, module, inputs, output):
+        try:
+            module.to("cpu")
+        except Exception:
+            pass
+        if self.aggressive:
+            _free_cuda_memory(aggressive=True)
+        return output
+
+    def cleanup(self) -> None:
+        for handle in self.handles:
+            try:
+                handle.remove()
+            except Exception:
+                pass
+        self.handles.clear()
+        try:
+            gc.collect()
+        except Exception:
+            pass
+        if torch.cuda.is_available():
+            try:
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
 
 
 def _latent_samples(latent: dict) -> torch.Tensor:
@@ -760,11 +855,11 @@ class PiDDecode:
                 "auto_download": ("BOOLEAN", {"default": True}),
                 "unload_comfy_before_pid": ("BOOLEAN", {"default": True}),
                 "aggressive_cleanup": ("BOOLEAN", {"default": True}),
-                "precision": (PRECISION_CHOICES, {"default": "bf16"}),
             },
             "optional": {
                 "vae": ("VAE",),
                 "pid_source_dir": ("STRING", {"default": "", "multiline": False}),
+                "sequential_offload": (SEQUENTIAL_OFFLOAD_CHOICES, {"default": "disabled"}),
                 "baseline_image": ("IMAGE",),
             },
         }
@@ -788,17 +883,19 @@ class PiDDecode:
         auto_download: bool,
         unload_comfy_before_pid: bool = True,
         aggressive_cleanup: bool = True,
-        precision: str = "bf16",
         vae=None,
         pid_source_dir: str = "",
+        sequential_offload: str = "disabled",
         baseline_image=None,
     ):
         backbone = str(backbone).strip()
         pid_ckpt_type = str(pid_ckpt_type).strip()
-        precision = str(precision).strip().lower()
+        sequential_offload = str(sequential_offload or "disabled").strip().lower()
 
-        if precision not in PRECISION_CHOICES:
-            raise PiDNodeError(f"Unknown precision={precision!r}; expected one of {PRECISION_CHOICES}")
+        if sequential_offload not in SEQUENTIAL_OFFLOAD_CHOICES:
+            raise PiDNodeError(
+                f"Unknown sequential_offload={sequential_offload!r}; expected one of {SEQUENTIAL_OFFLOAD_CHOICES}"
+            )
 
         if backbone not in PID_BACKBONES:
             raise PiDNodeError(f"Unknown backbone={backbone!r}; expected one of {BACKBONE_CHOICES}")
@@ -858,15 +955,14 @@ class PiDDecode:
             backbone=backbone,
             ckpt_type=pid_ckpt_type,
             checkpoint_path=checkpoint_path,
-            dtype_choice=precision,
+            dtype_choice="bf16",
             load_ema_to_reg=False,
         )
 
         b, _c, h, w = baseline_cpu.shape
         device = "cuda"
-        activation_dtype = _activation_dtype_for_precision(precision)
-        latent_inputs = samples_cpu.to(device=device, dtype=activation_dtype)
-        baseline_neg1_1 = (baseline_cpu.to(device=device, dtype=activation_dtype) * 2.0) - 1.0
+        latent_bf16 = samples_cpu.to(device=device, dtype=torch.bfloat16)
+        baseline_neg1_1 = (baseline_cpu.to(device=device, dtype=torch.bfloat16) * 2.0) - 1.0
         del samples_cpu
         del baseline_cpu
 
@@ -874,7 +970,7 @@ class PiDDecode:
         data_batch = {
             model.config.input_caption_key: [caption] * int(b),
             "LQ_video_or_image": baseline_neg1_1,
-            "LQ_latent": latent_inputs,
+            "LQ_latent": latent_bf16,
             "degrade_sigma": torch.full((int(b),), float(sigma), device=device, dtype=torch.float32),
         }
         infer_image_size = (int(h) * int(scale), int(w) * int(scale))
@@ -886,6 +982,9 @@ class PiDDecode:
                 pass
 
         _free_cuda_memory(aggressive=bool(aggressive_cleanup))
+        offloader = None
+        if sequential_offload != "disabled":
+            offloader = _SequentialBlockOffloader(model, sequential_offload, device=device)
         try:
             with torch.inference_mode():
                 out = model.generate_samples_from_batch(
@@ -899,8 +998,11 @@ class PiDDecode:
         except Exception as exc:
             # After a CUDA allocator/internal-assert failure, the process may be in a bad state.
             # Still try to free memory and return a useful error to the ComfyUI UI.
+            if offloader is not None:
+                offloader.cleanup()
+                offloader = None
             del data_batch
-            del latent_inputs
+            del latent_bf16
             del baseline_neg1_1
             _unload_pid_model(model, aggressive=True)
             del model
@@ -911,8 +1013,12 @@ class PiDDecode:
 
         del out
         del data_batch
-        del latent_inputs
+        del latent_bf16
         del baseline_neg1_1
+
+        if offloader is not None:
+            offloader.cleanup()
+            offloader = None
 
         _unload_pid_model(model, aggressive=bool(aggressive_cleanup))
         del model

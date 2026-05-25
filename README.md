@@ -139,10 +139,10 @@ pid_steps = 4
 scale = 1 or 2
 cfg_scale = 1.0
 sigma = 0.0
-precision = bf16
 auto_download = true
 unload_comfy_before_pid = true
 aggressive_cleanup = true
+sequential_offload = disabled
 ```
 
 For backbones where the matching VAE is not available as a ComfyUI `VAE`, connect a pre-decoded `baseline_image` instead.
@@ -163,16 +163,27 @@ Do not connect VAE -> PiD Decode vae when baseline_image is already connected.
 
 The old direct `VAE -> PiD Decode vae` path still works, but pre-decoding the baseline image makes the PiD-only stage easier to isolate.
 
-### Precision setting
+### Sequential block offload
 
-`PiD Decode` exposes a `precision` combo:
+`PiD Decode` includes an optional `sequential_offload` setting:
 
 ```text
-bf16    recommended default / safest
-fp16    lower precision / may reduce VRAM
+disabled                       fastest; previous behavior
+sequential_blocks              lower VRAM; slower
+sequential_blocks_aggressive   lowest VRAM attempt; slowest
 ```
 
-Native PyTorch FP8 is not exposed here because PiD uses normal PyTorch modules that do not support float8 as a drop-in compute dtype. FP8 needs special weight-only kernels, not a simple `model.to(float8)` cast.
+This is a best-effort memory mode for the PiD/DiT stage. It detects the largest transformer/DiT block stack, moves those blocks to CPU before sampling, then moves each block to CUDA only for its own forward pass. This can reduce peak VRAM, but it will be much slower.
+
+Recommended order when testing a borderline 4K run:
+
+```text
+1. disabled
+2. sequential_blocks
+3. sequential_blocks_aggressive
+```
+
+If ComfyUI reports that no block stack could be detected, set `sequential_offload=disabled`.
 
 ## Notes
 
@@ -213,11 +224,11 @@ Check that:
 - `backbone` matches the latent you are feeding into PiD.
 - The latent channel count matches the selected backbone.
 - Your connected `VAE` can decode that latent, or `baseline_image` is the correct native baseline image.
-- Start with `sigma=0.0`, `cfg_scale=1.0`, `pid_steps=4`, `precision=bf16`, and `scale=1` or `2`.
+- Start with `sigma=0.0`, `cfg_scale=1.0`, `pid_steps=4`, and `scale=1` or `2`.
 
 ### VRAM or cudaMallocAsync errors
 
-This build unloads ComfyUI models before PiD and unloads PiD again after the decode. If VRAM is still high, check the workflow first: connect a pre-decoded `baseline_image` into **PiD Decode** and disconnect the optional `vae` input on **PiD Decode**.
+This build unloads ComfyUI models before PiD and unloads PiD again after the decode. If VRAM is still high, check the workflow first: connect a pre-decoded `baseline_image` into **PiD Decode** and disconnect the optional `vae` input on **PiD Decode**. If the 4K path is still just over the limit, try `sequential_offload=sequential_blocks`, then `sequential_blocks_aggressive`.
 
 For 16GB GPUs, start with one of these:
 
