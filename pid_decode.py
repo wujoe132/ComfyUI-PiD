@@ -40,6 +40,7 @@ NODE_DIR = Path(__file__).resolve().parent
 COMFYUI_DIR = NODE_DIR.parent.parent
 VENDOR_DIR = NODE_DIR / "vendor"
 DEFAULT_PID_DIR = VENDOR_DIR / "PiD"
+DEFAULT_PID_MODEL_DIR = COMFYUI_DIR / "models" / "nvidia_pid"
 PID_REPO_URL = "https://github.com/nv-tlabs/PiD.git"
 PID_ZIP_URL = "https://github.com/nv-tlabs/PiD/archive/refs/heads/main.zip"
 HF_REPO_ID = "nvidia/PiD"
@@ -64,6 +65,12 @@ class PiDBackbone:
     ckpt_types: Tuple[str, ...]
     aux_files: Tuple[str, ...] = ()
     needs_flux_ae: bool = False
+
+
+@dataclass(frozen=True)
+class PiDHFSnapshot:
+    repo_id: str
+    required_files: Tuple[str, ...]
 
 
 # Mirrors NVIDIA's official pid/_src/inference/checkpoint_registry.py.
@@ -171,7 +178,38 @@ PID_BACKBONES: Dict[str, PiDBackbone] = {
 BACKBONE_CHOICES = list(PID_BACKBONES.keys())
 SEQUENTIAL_OFFLOAD_CHOICES = ["disabled", "sequential_blocks", "sequential_blocks_aggressive"]
 
-_MODEL_CACHE: Dict[Tuple[str, str, str, str, str, bool, str], object] = {}
+GEMMA_SNAPSHOT = PiDHFSnapshot(
+    repo_id="Efficient-Large-Model/gemma-2-2b-it",
+    required_files=(
+        "config.json",
+        "generation_config.json",
+        "model-00001-of-00002.safetensors",
+        "model-00002-of-00002.safetensors",
+        "model.safetensors.index.json",
+        "special_tokens_map.json",
+        "tokenizer.json",
+        "tokenizer.model",
+        "tokenizer_config.json",
+    ),
+)
+DINOv2_SNAPSHOT = PiDHFSnapshot(
+    repo_id="facebook/dinov2-with-registers-base",
+    required_files=("config.json", "model.safetensors", "preprocessor_config.json"),
+)
+SIGLIP_SNAPSHOT = PiDHFSnapshot(
+    repo_id="google/siglip2-so400m-patch14-224",
+    required_files=(
+        "config.json",
+        "model.safetensors",
+        "preprocessor_config.json",
+        "special_tokens_map.json",
+        "tokenizer.json",
+        "tokenizer.model",
+        "tokenizer_config.json",
+    ),
+)
+
+_MODEL_CACHE: Dict[Tuple[str, str, str, str, str, str, bool, str], object] = {}
 
 
 class PiDNodeError(RuntimeError):
@@ -294,6 +332,45 @@ def _resolve_pid_dir(pid_source_dir: str = "") -> Path:
     return DEFAULT_PID_DIR.resolve()
 
 
+def _resolve_pid_model_dir() -> Path:
+    """Return the ComfyUI-managed root for NVIDIA PiD weights and assets."""
+    if folder_paths is not None:
+        models_dir = getattr(folder_paths, "models_dir", None)
+        if models_dir:
+            return (Path(models_dir) / "nvidia_pid").expanduser().resolve()
+    return DEFAULT_PID_MODEL_DIR.resolve()
+
+
+def _migrate_legacy_checkpoints(model_dir: Path) -> List[str]:
+    """Move bundled legacy checkpoints into ComfyUI's shared model directory."""
+    legacy_dir = DEFAULT_PID_DIR / "checkpoints"
+    target_dir = model_dir / "checkpoints"
+    messages: List[str] = []
+    if not legacy_dir.is_dir():
+        return messages
+
+    for src in sorted(path for path in legacy_dir.rglob("*") if path.is_file()):
+        relpath = src.relative_to(legacy_dir)
+        target = target_dir / relpath
+        if target.exists():
+            messages.append(f"Legacy PiD asset kept because destination exists: {src}")
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(src), str(target))
+        messages.append(f"Moved legacy PiD asset: {src} -> {target}")
+
+    for directory in sorted((path for path in legacy_dir.rglob("*") if path.is_dir()), reverse=True):
+        try:
+            directory.rmdir()
+        except OSError:
+            pass
+    try:
+        legacy_dir.rmdir()
+    except OSError:
+        pass
+    return messages
+
+
 def _pid_is_present(pid_dir: Path) -> bool:
     return (pid_dir / "pid" / "_src" / "utils" / "model_loader.py").is_file()
 
@@ -350,13 +427,92 @@ def _ensure_hf_download_available() -> None:
         ) from exc
 
 
+def _hf_snapshot_dir(model_dir: Path, snapshot: PiDHFSnapshot) -> Path:
+    return model_dir / "huggingface" / Path(snapshot.repo_id)
+
+
+def _missing_hf_snapshot_files(model_dir: Path, snapshot: PiDHFSnapshot) -> List[str]:
+    snapshot_dir = _hf_snapshot_dir(model_dir, snapshot)
+    return [relpath for relpath in snapshot.required_files if not (snapshot_dir / relpath).is_file()]
+
+
+def _required_hf_snapshots(backbone: str) -> Tuple[PiDHFSnapshot, ...]:
+    if backbone not in PID_BACKBONES:
+        raise PiDNodeError(f"Unknown backbone={backbone!r}; expected one of {BACKBONE_CHOICES}")
+    snapshots = [GEMMA_SNAPSHOT]
+    if backbone == "dinov2":
+        snapshots.append(DINOv2_SNAPSHOT)
+    elif backbone == "siglip":
+        snapshots.append(SIGLIP_SNAPSHOT)
+    return tuple(snapshots)
+
+
+def _download_hf_snapshot(model_dir: Path, snapshot: PiDHFSnapshot) -> str:
+    snapshot_dir = _hf_snapshot_dir(model_dir, snapshot)
+    missing = _missing_hf_snapshot_files(model_dir, snapshot)
+    if not missing:
+        return f"Hugging Face snapshot already exists: {snapshot_dir}"
+
+    _ensure_hf_download_available()
+    from huggingface_hub import snapshot_download
+
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    snapshot_download(
+        repo_id=snapshot.repo_id,
+        local_dir=str(snapshot_dir),
+        allow_patterns=list(snapshot.required_files),
+        token=token,
+    )
+    missing = _missing_hf_snapshot_files(model_dir, snapshot)
+    if missing:
+        missing_text = "\n".join(f"  - {snapshot_dir / relpath}" for relpath in missing)
+        raise PiDNodeError(
+            f"Hugging Face snapshot download finished but required files are missing for {snapshot.repo_id}:\n"
+            f"{missing_text}"
+        )
+    return f"Downloaded Hugging Face snapshot: {snapshot.repo_id} -> {snapshot_dir}"
+
+
+def _ensure_hf_snapshot(model_dir: Path, snapshot: PiDHFSnapshot, allow_download: bool = True) -> Path:
+    snapshot_dir = _hf_snapshot_dir(model_dir, snapshot)
+    missing = _missing_hf_snapshot_files(model_dir, snapshot)
+    if not missing:
+        return snapshot_dir
+    if allow_download:
+        try:
+            _download_hf_snapshot(model_dir, snapshot)
+            return snapshot_dir
+        except Exception as exc:
+            if isinstance(exc, PiDNodeError):
+                raise
+            raise PiDNodeError(
+                f"Could not download required Hugging Face snapshot {snapshot.repo_id} to:\n"
+                f"  {snapshot_dir}\n\n"
+                f"Original download error: {exc}"
+            ) from exc
+
+    missing_text = "\n".join(f"  - {snapshot_dir / relpath}" for relpath in missing)
+    raise PiDNodeError(
+        f"PiD requires the local Hugging Face snapshot {snapshot.repo_id} at:\n"
+        f"  {snapshot_dir}\n\n"
+        "auto_download=false enables strict local-only mode. Download or copy these missing files:\n"
+        f"{missing_text}"
+    )
+
+
+def _ensure_hf_snapshots(model_dir: Path, backbone: str, allow_download: bool = True) -> None:
+    for snapshot in _required_hf_snapshots(backbone):
+        _ensure_hf_snapshot(model_dir, snapshot, allow_download=allow_download)
+
+
 
 def _candidate_comfy_ae_paths() -> List[Path]:
     """Return likely local Flux/Z-Image AE VAE paths from ComfyUI.
 
-    NVIDIA PiD's own config instantiates a Flux VAE encoder/tokenizer and expects
-    ./checkpoints/ae.safetensors relative to the PiD repository root. Most ComfyUI
-    Z-Image workflows already have the exact same file under ComfyUI/models/vae/.
+    NVIDIA PiD's own config instantiates a Flux VAE encoder/tokenizer. Most
+    ComfyUI Z-Image workflows already have the exact same file under
+    ComfyUI/models/vae/.
     """
     candidates: List[Path] = []
 
@@ -413,8 +569,8 @@ def _candidate_comfy_ae_paths() -> List[Path]:
     return out
 
 
-def _copy_local_ae_to_pid(pid_dir: Path) -> Optional[str]:
-    target = pid_dir / AE_REL_PATH
+def _copy_local_ae_to_pid(model_dir: Path) -> Optional[str]:
+    target = model_dir / AE_REL_PATH
     if target.is_file():
         return f"Flux AE VAE already exists: {target}"
 
@@ -426,20 +582,20 @@ def _copy_local_ae_to_pid(pid_dir: Path) -> Optional[str]:
     return None
 
 
-def _download_ae_safetensors(pid_dir: Path) -> str:
-    _ensure_hf_download_available()
-    from huggingface_hub import hf_hub_download
-
-    target = pid_dir / AE_REL_PATH
+def _download_ae_safetensors(model_dir: Path) -> str:
+    target = model_dir / AE_REL_PATH
     if target.is_file():
         return f"Flux AE VAE already exists: {target}"
 
+    _ensure_hf_download_available()
+    from huggingface_hub import hf_hub_download
+
     token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
-    pid_dir.mkdir(parents=True, exist_ok=True)
+    model_dir.mkdir(parents=True, exist_ok=True)
     hf_hub_download(
         repo_id=HF_REPO_ID,
         filename=AE_REL_PATH,
-        local_dir=str(pid_dir),
+        local_dir=str(model_dir),
         token=token,
     )
     if not target.is_file():
@@ -447,19 +603,19 @@ def _download_ae_safetensors(pid_dir: Path) -> str:
     return f"Downloaded Flux AE VAE: {target}"
 
 
-def _ensure_ae_safetensors(pid_dir: Path, allow_download: bool = True) -> Path:
-    """Ensure PiD's required ./checkpoints/ae.safetensors exists."""
-    target = pid_dir / AE_REL_PATH
+def _ensure_ae_safetensors(model_dir: Path, allow_download: bool = True) -> Path:
+    """Ensure PiD's required Flux AE exists in the shared model directory."""
+    target = model_dir / AE_REL_PATH
     if target.is_file():
         return target
 
-    copied = _copy_local_ae_to_pid(pid_dir)
+    copied = _copy_local_ae_to_pid(model_dir)
     if copied and target.is_file():
         return target
 
     if allow_download:
         try:
-            _download_ae_safetensors(pid_dir)
+            _download_ae_safetensors(model_dir)
             return target
         except Exception as exc:
             local_candidates = "\n".join(f"  - {p}" for p in _candidate_comfy_ae_paths()) or "  - none found"
@@ -488,20 +644,20 @@ def _ensure_ae_safetensors(pid_dir: Path, allow_download: bool = True) -> Path:
     )
 
 
-def _download_hf_file(pid_dir: Path, relpath: str) -> str:
-    _ensure_hf_download_available()
-    from huggingface_hub import hf_hub_download
-
-    target = pid_dir / relpath
+def _download_hf_file(model_dir: Path, relpath: str) -> str:
+    target = model_dir / relpath
     if target.is_file():
         return f"Asset already exists: {target}"
 
+    _ensure_hf_download_available()
+    from huggingface_hub import hf_hub_download
+
     token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
-    pid_dir.mkdir(parents=True, exist_ok=True)
+    model_dir.mkdir(parents=True, exist_ok=True)
     hf_hub_download(
         repo_id=HF_REPO_ID,
         filename=relpath,
-        local_dir=str(pid_dir),
+        local_dir=str(model_dir),
         token=token,
     )
     if not target.is_file():
@@ -525,9 +681,9 @@ def _checkpoint_for(backbone: str, ckpt_type: str) -> PiDCheckpoint:
         raise PiDNodeError(f"No PiD checkpoint registered for backbone={backbone!r}, pid_ckpt_type={ckpt_type!r}") from exc
 
 
-def _ensure_checkpoint(pid_dir: Path, backbone: str, ckpt_type: str, allow_download: bool = True) -> Path:
+def _ensure_checkpoint(model_dir: Path, backbone: str, ckpt_type: str, allow_download: bool = True) -> Path:
     ckpt = _checkpoint_for(backbone, ckpt_type)
-    ckpt_path = pid_dir / ckpt.relpath
+    ckpt_path = model_dir / ckpt.relpath
     if ckpt_path.is_file():
         return ckpt_path
     if not allow_download:
@@ -535,27 +691,66 @@ def _ensure_checkpoint(pid_dir: Path, backbone: str, ckpt_type: str, allow_downl
             f"PiD checkpoint is missing: {ckpt_path}\n"
             "Set auto_download=true or download the matching file from nvidia/PiD."
         )
-    _download_hf_file(pid_dir, ckpt.relpath)
+    _download_hf_file(model_dir, ckpt.relpath)
     return ckpt_path
 
 
-def _ensure_backbone_assets(pid_dir: Path, backbone: str, allow_download: bool = True) -> None:
+def _ensure_backbone_assets(model_dir: Path, backbone: str, allow_download: bool = True) -> None:
     info = PID_BACKBONES[backbone]
     if info.needs_flux_ae:
-        _ensure_ae_safetensors(pid_dir, allow_download=allow_download)
+        _ensure_ae_safetensors(model_dir, allow_download=allow_download)
 
-    missing = [relpath for relpath in info.aux_files if not (pid_dir / relpath).is_file()]
-    if not missing:
-        return
-    if not allow_download:
-        missing_text = "\n".join(f"  - {pid_dir / relpath}" for relpath in missing)
+    missing = [relpath for relpath in info.aux_files if not (model_dir / relpath).is_file()]
+    if missing and not allow_download:
+        missing_text = "\n".join(f"  - {model_dir / relpath}" for relpath in missing)
         raise PiDNodeError(
             f"{info.label} PiD support needs these extra asset files:\n"
             f"{missing_text}\n\n"
             "Set auto_download=true or download them from nvidia/PiD."
         )
     for relpath in missing:
-        _download_hf_file(pid_dir, relpath)
+        _download_hf_file(model_dir, relpath)
+    _ensure_hf_snapshots(model_dir, backbone, allow_download=allow_download)
+
+
+def _redirect_pid_text_encoder(model_dir: Path) -> None:
+    """Point NVIDIA PiD's built-in Gemma mapping at the local snapshot."""
+    try:
+        from pid._src.models import pixeldit_model
+    except Exception as exc:
+        raise PiDNodeError(f"Could not configure NVIDIA PiD's local text encoder path: {exc}") from exc
+    pixeldit_model._TEXT_ENCODER_DICT["gemma-2-2b-it"] = _hydra_path(_hf_snapshot_dir(model_dir, GEMMA_SNAPSHOT))
+
+
+def _hydra_path(path: Path) -> str:
+    """Format an absolute local path for NVIDIA PiD's Hydra overrides."""
+    return path.expanduser().resolve().as_posix()
+
+
+def _pid_asset_experiment_opts(model_dir: Path, backbone: str) -> List[str]:
+    """Redirect NVIDIA PiD's config-relative tokenizer assets to ComfyUI models."""
+    def override(field: str, relpath: str) -> str:
+        return f"++model.config.tokenizer.{field}={_hydra_path(model_dir / relpath)}"
+
+    if backbone in ("zimage", "flux"):
+        return [override("vae_pth", AE_REL_PATH)]
+    if backbone == "flux2":
+        return [override("vae_pth", "checkpoints/flux2_ae.safetensors")]
+    if backbone == "sd3":
+        return [override("vae_pth", "checkpoints/sd3_vae/vae/diffusion_pytorch_model.safetensors")]
+    if backbone == "dinov2":
+        return [
+            override("pretrained_path", f"huggingface/{DINOv2_SNAPSHOT.repo_id}"),
+            override("pretrained_decoder_path", "checkpoints/rae/decoders/dinov2/wReg_base/ViTXL_n08_i512/model.pt"),
+            override("normalization_stat_path", "checkpoints/rae/stats/dinov2/wReg_base/imagenet1k_512/stat.pt"),
+        ]
+    if backbone == "siglip":
+        return [
+            override("pretrained_path", f"huggingface/{SIGLIP_SNAPSHOT.repo_id}"),
+            override("pretrained_decoder_path", "checkpoints/scale_rae/decoder/siglip2_sop14_i224_web73M_ganw3_decXL.pt"),
+            override("decoder_config_path", "checkpoints/scale_rae/decoder/XL_decoder_config.json"),
+        ]
+    raise PiDNodeError(f"Unknown backbone={backbone!r}; expected one of {BACKBONE_CHOICES}")
 
 
 def _import_pid_loader(pid_dir: Path):
@@ -574,6 +769,7 @@ def _import_pid_loader(pid_dir: Path):
 
 def _load_pid_model(
     pid_dir: Path,
+    model_dir: Path,
     backbone: str,
     ckpt_type: str,
     checkpoint_path: Path,
@@ -584,6 +780,7 @@ def _load_pid_model(
     config_file = "pid/_src/configs/pid/config.py"
     cache_key = (
         str(pid_dir),
+        str(model_dir),
         backbone,
         ckpt_type,
         str(checkpoint_path),
@@ -598,6 +795,7 @@ def _load_pid_model(
         raise PiDNodeError("PiD's official model loader instantiates the decoder on CUDA. CUDA GPU is required.")
 
     load_model_from_checkpoint = _import_pid_loader(pid_dir)
+    _redirect_pid_text_encoder(model_dir)
 
     # PiD's config helper expects config_file to be relative to the PiD repo root.
     with _pushd(pid_dir):
@@ -606,7 +804,7 @@ def _load_pid_model(
             checkpoint_path=str(checkpoint_path),
             config_file=config_file,
             enable_fsdp=False,
-            experiment_opts=[],
+            experiment_opts=_pid_asset_experiment_opts(model_dir, backbone),
             strict=False,
             load_ema_to_reg=load_ema_to_reg,
         )
@@ -1135,9 +1333,11 @@ class PiDDecode:
             scale = int(ckpt.scale or backbone_info.default_scale)
 
         pid_dir = _resolve_pid_dir(pid_source_dir)
+        model_dir = _resolve_pid_model_dir()
         _ensure_pid_source(pid_dir, allow_download=bool(auto_download))
-        checkpoint_path = _ensure_checkpoint(pid_dir, backbone, pid_ckpt_type, allow_download=bool(auto_download))
-        _ensure_backbone_assets(pid_dir, backbone, allow_download=bool(auto_download))
+        _migrate_legacy_checkpoints(model_dir)
+        checkpoint_path = _ensure_checkpoint(model_dir, backbone, pid_ckpt_type, allow_download=bool(auto_download))
+        _ensure_backbone_assets(model_dir, backbone, allow_download=bool(auto_download))
 
         samples = _latent_samples(latent)
         sigma = _latent_pid_sigma(latent, sigma)
@@ -1172,6 +1372,7 @@ class PiDDecode:
 
         model = _load_pid_model(
             pid_dir=pid_dir,
+            model_dir=model_dir,
             backbone=backbone,
             ckpt_type=pid_ckpt_type,
             checkpoint_path=checkpoint_path,

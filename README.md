@@ -54,7 +54,6 @@ Requirements:
 | **PiD Prepare** | Prepares latent, caption, checkpoint, assets, and metadata on CPU. |
 | **PiD Sample** | Runs the heavy PiD sampling step in a subprocess. |
 | **PiD Finalize** | Converts sampled PiD output back to ComfyUI `IMAGE`. |
-| **PiD Decode (Staged)** | Convenience wrapper around the staged path. |
 
 ## Supported backbones
 
@@ -136,10 +135,16 @@ Large outputs can require a lot of VRAM. If a run fails, try:
 
 ## PiD source and weights
 
-By default, the node uses:
+By default, the NVIDIA PiD source checkout lives under the custom node:
 
 ```text
 ComfyUI/custom_nodes/ComfyUI-PiD/vendor/PiD
+```
+
+Downloaded weights and assets live in ComfyUI's shared models directory:
+
+```text
+ComfyUI/models/nvidia_pid/checkpoints
 ```
 
 You can override the PiD source location with:
@@ -147,7 +152,46 @@ You can override the PiD source location with:
 - `PID_REPO_DIR`
 - `COMFYUI_PID_REPO_DIR`
 
-When `auto_download=true`, the node downloads missing PiD source/checkpoints/assets as needed.
+These overrides affect the source checkout only. Weights and assets continue to
+use `ComfyUI/models/nvidia_pid/checkpoints`.
+
+When `auto_download=true`, the node downloads missing PiD source, checkpoints,
+and assets as needed. Existing weights from older versions under
+`vendor/PiD/checkpoints` are moved into the shared models directory on first use.
+
+## Offline setup
+
+PiD can run without internet after its source and Python dependencies are
+installed and the required models are available locally. The common offline
+layout is:
+
+```text
+ComfyUI/models/nvidia_pid/
+  checkpoints/
+  huggingface/
+    Efficient-Large-Model/gemma-2-2b-it/
+    facebook/dinov2-with-registers-base/        # dinov2 backbone only
+    google/siglip2-so400m-patch14-224/          # siglip backbone only
+```
+
+The Gemma snapshot is required for every PiD decode. The DINOv2 and SigLIP
+snapshots are only required when their matching backbones are selected.
+
+To prepare an offline installation manually, clone NVIDIA's source while online
+and download the required models:
+
+```bash
+git clone --depth 1 https://github.com/nv-tlabs/PiD.git ComfyUI/custom_nodes/ComfyUI-PiD/vendor/PiD
+hf download nvidia/PiD --local-dir ComfyUI/models/nvidia_pid --include "checkpoints/*"
+hf download Efficient-Large-Model/gemma-2-2b-it --local-dir ComfyUI/models/nvidia_pid/huggingface/Efficient-Large-Model/gemma-2-2b-it --exclude "gemma-2-2b-it.safetensors"
+hf download facebook/dinov2-with-registers-base --local-dir ComfyUI/models/nvidia_pid/huggingface/facebook/dinov2-with-registers-base
+hf download google/siglip2-so400m-patch14-224 --local-dir ComfyUI/models/nvidia_pid/huggingface/google/siglip2-so400m-patch14-224
+```
+
+The final two commands are optional unless you use their backbones.
+`auto_download=false` enables strict local-only mode and reports any missing
+files. With `auto_download=true`, existing complete local folders are used
+without network calls; missing snapshots are downloaded lazily.
 
 ## Example workflow
 

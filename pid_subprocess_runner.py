@@ -50,6 +50,7 @@ def main() -> int:
 
         model = _load_pid_model(
             pid_dir=Path(payload["pid_dir"]),
+            model_dir=Path(payload["model_dir"]),
             backbone=str(payload["backbone"]),
             ckpt_type=str(payload["pid_ckpt_type"]),
             checkpoint_path=Path(payload["checkpoint_path"]),
