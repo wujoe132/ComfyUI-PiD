@@ -1702,7 +1702,7 @@ class PiDDecode:
         return {
             "required": {
                 "latent": ("LATENT",),
-                "caption": ("STRING", {"multiline": True, "default": ""}),
+                "caption": ("STRING", {"forceInput": True}),
                 # Use ComfyUI's canonical combo syntax.  The older
                 # ("COMBO", {"options": ...}) form can cause the frontend to
                 # rebuild widget_values with the first combo dropped after tab

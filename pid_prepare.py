@@ -68,7 +68,7 @@ class PiDPrepare:
         return {
             "required": {
                 "latent": ("LATENT",),
-                "caption": ("STRING", {"multiline": True, "default": ""}),
+                "caption": ("STRING", {"forceInput": True}),
                 "backbone": (BACKBONE_CHOICES, {"default": "zimage"}),
                 "pid_ckpt_type": (["2k", "2kto4k"], {"default": "2k"}),
                 "scale": ("INT", {"default": 0, "min": 0, "max": 8, "step": 1}),

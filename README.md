@@ -85,6 +85,23 @@ KSampler latent         -> PiD Decode latent
 PiD Decode image        -> Save Image
 ```
 
+Recommended first test settings:
+
+```text
+backbone = zimage
+pid_ckpt_type = 2k
+pid_steps = 4
+scale = 1 or 2
+cfg_scale = 1.0
+sigma = 0.0
+auto_download = true
+unload_comfy_before_pid = true
+aggressive_cleanup = true
+sequential_offload = auto_low_vram
+pid_weight_precision = fp32_compatible
+pixel_chunk_patches = 0
+```
+
 For official latent-conditioned checkpoints, leave `vae` and `baseline_image` disconnected unless you specifically need an external baseline size.
 
 ## Lowest-VRAM staged workflow
@@ -138,27 +155,6 @@ Available offload policies:
 load for additional savings. It is not the default because output changes. In the
 4K synthetic comparison, mean absolute delta was `0.04556` and RMSE was `0.07943`
 against `fp32_compatible`.
-
-
-### Z-Image 16GB VRAM test presets
-
-These settings are based on personal Z-Image model tests on a 16GB VRAM GPU.
-
-Recommended settings for `1024` to `4096`:
-
-```text
-aggressive_cleanup = on
-sequential_offload = auto_low_vram or sequential_blocks
-pid_weight_precision = bf16_weights_experimental
-```
-
-Recommended settings for `512` to `2048`:
-
-```text
-aggressive_cleanup = off
-sequential_offload = disabled
-pid_weight_precision = bf16_weights_experimental
-```
 
 ## Output size guide
 
