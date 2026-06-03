@@ -139,6 +139,27 @@ load for additional savings. It is not the default because output changes. In th
 4K synthetic comparison, mean absolute delta was `0.04556` and RMSE was `0.07943`
 against `fp32_compatible`.
 
+
+### Z-Image 16GB VRAM test presets
+
+These settings are based on personal Z-Image model tests on a 16GB VRAM GPU.
+
+Recommended settings for `1024` to `4096`:
+
+```text
+aggressive_cleanup = on
+sequential_offload = auto_low_vram or sequential_blocks
+pid_weight_precision = bf16_weights_experimental
+```
+
+Recommended settings for `512` to `2048`:
+
+```text
+aggressive_cleanup = off
+sequential_offload = disabled
+pid_weight_precision = bf16_weights_experimental
+```
+
 ## Output size guide
 
 ```text
