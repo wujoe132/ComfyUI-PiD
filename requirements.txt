@@ -2,7 +2,9 @@
 # ComfyUI usually already provides torch; do not install torch from here.
 hydra-core==1.3.2
 omegaconf==2.3.0
+PyYAML
 attrs
+attr
 einops
 loguru
 termcolor
@@ -14,10 +16,13 @@ imageio
 opencv-python-headless
 pandas
 safetensors
-huggingface-hub>=1.0
+# Transformers 4.x is still the safest line for ComfyUI and SigLIP/Scale-RAE.
+# It expects huggingface-hub 0.x rather than the 1.x API line.
+huggingface-hub>=0.36.0,<1.0
 sentencepiece
 boto3
 botocore
 accelerate
-transformers>=4.57.0
+transformers>=4.57.0,<5
 diffusers>=0.37.0
+packaging
