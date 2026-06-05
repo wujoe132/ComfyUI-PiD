@@ -261,6 +261,17 @@ without network calls; missing snapshots are downloaded lazily.
 - Final latents with `sigma=0.0` can work. For Z-Image-Turbo and Flux2-Klein, final `x0` is the recommended latent; for normal Z-Image / Flux2 / Qwen-Image, captured intermediate latents usually better match the official PiD recipe.
 - SDXL captured latents are automatically converted from Comfy/k-diffusion's variance-exploding frame to the VP frame expected by PiD.
 
+## PiD Empty Latent Image
+
+`PiD Empty Latent Image` is a lightweight preset wrapper for PiD-friendly base resolutions.
+It intentionally mirrors `EmptySD3LatentImage` output and creates SD3-style empty latents with shape:
+
+```
+[batch, 16, height / 8, width / 8]
+```
+
+It does **not** expose a backbone selector. The node only provides the `2k` / `2kto4k` switch, a dynamic resolution preset list, and `batch_size`. Backbone selection stays in the PiD processing nodes.
+
 ## Example workflows
 
 Complete backbone-specific workflows are included in `example_workflows/`. They include the generation side plus PiD decode side: model loader, text encoder loader, prompt encode, empty latent, `PiD KSampler Capture`, `PiD Prepare`, `PiD Sample`, `PiD Finalize`, and `Save Image`.
