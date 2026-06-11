@@ -1,4 +1,3 @@
 __pycache__/
 *.pyc
-vendor/PiD/
-vendor/PiD-main.zip
+vendor/

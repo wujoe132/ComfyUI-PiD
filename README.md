@@ -1,27 +1,26 @@
 # ComfyUI-PiD
 
-**ComfyUI custom nodes** for using NVIDIA **PiD** as a pixel diffusion decoder.
+Custom ComfyUI nodes for running NVIDIA PiD through ComfyUI's native PixelDiT/PiD model support.
 
-<img width="1058" height="604" alt="image" src="https://github.com/user-attachments/assets/cc5a9da3-94c6-4546-9574-c8387d5dffdb" />
+This version uses the Comfy-Org repackaged PiD models from:
 
-<img width="4096" height="2048" alt="1111111111111111" src="https://github.com/user-attachments/assets/7ccd55ee-e571-4996-9c9c-4b5cecbb4418" />
+https://huggingface.co/Comfy-Org/PixelDiT
 
-PiD is not a normal ComfyUI `VAE`. For the official NVIDIA latent-conditioned checkpoints, it needs only a latent, a prompt/caption, and a sigma value:
+It no longer uses legacy NVIDIA checkpoint/source loading, Hydra configs, or the old custom model cache.
 
 ```text
-LATENT + caption + sigma -> PiD -> IMAGE
+LATENT + caption + sigma -> native ComfyUI PiD -> IMAGE
 ```
-
-Image-conditioning inputs were removed because they are not part of the released latent-conditioned PiD path. Output size is inferred from the latent grid and selected PiD scale.
 
 ## Features
 
 - Direct **PiD Decode** node that returns a ComfyUI `IMAGE`.
-- Staged low-VRAM workflow: **PiD Prepare → PiD Sample → PiD Finalize**.
-- **PiD Sample** runs in a subprocess so CUDA memory is released after sampling.
+- Staged workflow: **PiD Prepare -> PiD Sample -> PiD Finalize**.
+- **PiD Sample** runs in-process with ComfyUI-native PiD model loading and the NVIDIA-compatible distilled PiD student sampler.
 - **PiD KSampler Capture** for grabbing an intermediate latent and matching sigma.
-- Lazy setup: PiD source, checkpoints, and required assets are prepared on first run when `auto_download=true`.
-- Exact low-VRAM pixel chunking and sequential block offload for large outputs.
+- Native ComfyUI model loading through `Comfy-Org/PixelDiT`.
+- BF16/FP8 model precision selector with native Comfy-Org files.
+- Auto-download into native ComfyUI model folders under `nvidia_pid` subfolders when `auto_download=true`.
 
 ## Install
 
@@ -37,49 +36,83 @@ python -m pip install -r requirements.txt
 Restart ComfyUI.
 
 Requirements:
-- Python `>=3.10`
-- NVIDIA CUDA GPU
-- Working ComfyUI install
-- Enough VRAM for PiD, especially for `2kto4k` or large output scales
 
-`requirements.txt` does not install PyTorch because ComfyUI usually provides it.
+- Recent ComfyUI with native PixelDiT/PiD support.
+- Python `>=3.10`.
+- NVIDIA CUDA GPU recommended.
+- Enough VRAM for native PiD, especially for `2kto4k`.
+
+## Required Models
+
+The node downloads these from `Comfy-Org/PixelDiT` when needed, or you can place them manually. Use `model_precision=bf16` for the BF16 files or `model_precision=fp8` for the FP8 text encoder plus MXFP8 PiD diffusion files.
+
+Text encoder:
+
+```text
+ComfyUI/models/text_encoders/nvidia_pid/gemma_2_2b_it_elm_bf16.safetensors
+ComfyUI/models/text_encoders/nvidia_pid/gemma_2_2b_it_elm_fp8_scaled.safetensors
+```
+
+Diffusion models:
+
+```text
+ComfyUI/models/diffusion_models/nvidia_pid/pid_flux1_512_to_2048_4step_bf16.safetensors
+ComfyUI/models/diffusion_models/nvidia_pid/pid_flux1_1024_to_4096_4step_bf16.safetensors
+ComfyUI/models/diffusion_models/nvidia_pid/pid_flux2_512_to_2048_4step_bf16.safetensors
+ComfyUI/models/diffusion_models/nvidia_pid/pid_flux2_1024_to_4096_4step_2606_bf16.safetensors
+ComfyUI/models/diffusion_models/nvidia_pid/pid_sd3_512_to_2048_4step_bf16.safetensors
+ComfyUI/models/diffusion_models/nvidia_pid/pid_sd3_1024_to_4096_4step_bf16.safetensors
+ComfyUI/models/diffusion_models/nvidia_pid/pid_sdxl_1024_to_4096_4step_bf16.safetensors
+ComfyUI/models/diffusion_models/nvidia_pid/pid_qwenimage_1024_to_4096_4step_bf16.safetensors
+ComfyUI/models/diffusion_models/nvidia_pid/pid_flux1_512_to_2048_4step_mxfp8.safetensors
+ComfyUI/models/diffusion_models/nvidia_pid/pid_flux1_1024_to_4096_4step_mxfp8.safetensors
+ComfyUI/models/diffusion_models/nvidia_pid/pid_flux2_512_to_2048_4step_mxfp8.safetensors
+ComfyUI/models/diffusion_models/nvidia_pid/pid_flux2_1024_to_4096_4step_mxfp8.safetensors
+```
+
+Existing files in the root `models/diffusion_models` or `models/text_encoders` folders are still accepted. New downloads go into the `nvidia_pid` subfolders.
+
+BF16 is the recommended quality default for PiD output. FP8/MXFP8 is available as a lower-VRAM option for Flux1 and Flux2, but it can show visible white speckle or high-frequency noise on some systems; switch `model_precision` back to `bf16` if that happens. SD3, SDXL, and QwenImage must use `model_precision=bf16`.
+
+Native PiD uses the NVIDIA distilled 4-step student SDE schedule by default (`[0.999, 0.866, 0.634, 0.342, 0.0]`) while still loading the Comfy-Org `.safetensors` models through ComfyUI. This avoids the over-sharp grain that can appear when the distilled PiD checkpoint is driven through a generic Euler/simple sampler.
+
+For compatibility with the original NVIDIA PiD nodes, captured low-quality latents are passed to PiD directly as `LQ_latent`. The normal PiD Decode and staged PiD Sample path use the original raw latent conditioning.
 
 ## Nodes
 
 | Node | Purpose |
 | --- | --- |
-| **PiD Decode** | One-node PiD decode from latent to image. |
+| **PiD Decode** | One-node native PiD decode from latent to image. |
 | **PiD Text Prompt** | One prompt box with `text` for CLIP and `caption` for PiD. |
 | **PiD KSampler Capture** | KSampler-compatible sampler that returns final latent, captured PiD latent, and sigma. |
-| **PiD Prepare** | Prepares latent, caption, checkpoint, assets, and metadata on CPU. |
-| **PiD Sample** | Runs the heavy PiD sampling step in a subprocess. |
-| **PiD Finalize** | Converts sampled PiD output back to ComfyUI `IMAGE`. |
+| **PiD Prepare** | Prepares latent, caption, native model paths, and metadata on CPU. |
+| **PiD Sample** | Runs native PiD sampling in-process from prepared CPU latent data. |
+| **PiD Finalize** | Converts native PiD pixel output to ComfyUI `IMAGE`. |
 
-## Supported backbones
+## Supported Backbones
 
-| Value | Backbone | Latent channels | Checkpoints |
+| Value | Native PiD file family | Latent channels | Checkpoints |
 | --- | --- | ---: | --- |
-| `zimage` | Z-Image / Flux-compatible | 16 | `2k`, `2kto4k` |
-| `zimage-turbo` | Z-Image-Turbo / Flux-compatible | 16 | `2k`, `2kto4k` |
-| `flux` | Flux | 16 | `2k`, `2kto4k` |
-| `flux2` | Flux2 | 128 | `2k`, `2kto4k` |
-| `flux2-klein-4b` | Flux2-Klein-4B | 128 | `2k`, `2kto4k` |
-| `flux2-klein-9b` | Flux2-Klein-9B | 128 | `2k`, `2kto4k` |
-| `sd3` | Stable Diffusion 3 | 16 | `2k`, `2kto4k` |
-| `sdxl` | Stable Diffusion XL | 4 | `2kto4k` |
-| `qwenimage` | Qwen-Image | 16 | `2kto4k` |
-| `qwenimage-2512` | Qwen-Image-2512 | 16 | `2kto4k` |
-| `dinov2` | DINOv2 RAE | 768 | `2k` |
-| `siglip` | SigLIP Scale-RAE | 1152 | `2k` |
+| `zimage` | Flux1 PiD | 16 | `2k`, `2kto4k` |
+| `zimage-turbo` | Flux1 PiD | 16 | `2k`, `2kto4k` |
+| `flux` | Flux1 PiD | 16 | `2k`, `2kto4k` |
+| `flux2` | Flux2 PiD | 128 | `2k`, `2kto4k` |
+| `flux2-klein-4b` | Flux2 PiD | 128 | `2k`, `2kto4k` |
+| `flux2-klein-9b` | Flux2 PiD | 128 | `2k`, `2kto4k` |
+| `sd3` | SD3 PiD | 16 | `2k`, `2kto4k` |
+| `sdxl` | SDXL PiD | 4 | `2kto4k` |
+| `qwenimage` | QwenImage PiD | 16 | `2kto4k` |
+| `qwenimage-2512` | QwenImage PiD | 16 | `2kto4k` |
 
-`scale=0` uses NVIDIA's default scale for the selected checkpoint: `4x` for Flux / Flux2 / SD3 / SDXL / Qwen-Image / Z-Image / Z-Image-Turbo / DINOv2, and `8x` for SigLIP Scale-RAE.
-SDXL and Qwen-Image only ship NVIDIA's `2kto4k` PiD checkpoint. Flux2 and Flux2-Klein `2kto4k` use the newer `_2606` checkpoint, which replaces the older color-drifting release.
+`dinov2` and `siglip` are no longer supported because Comfy-Org does not provide native PiD files for those backbones.
 
-All currently released NVIDIA PiD checkpoints are 4-step distilled. The UI still allows other `pid_steps` and manual `scale` values for testing / low-VRAM debugging, but the official default is `pid_steps=4` and the checkpoint's native scale.
+`scale=0` uses the native checkpoint scale, currently `4x` for all supported models.
 
-## Lowest-VRAM staged workflow
+BF16 Flux2 `2kto4k` uses the newer `pid_flux2_1024_to_4096_4step_2606_bf16.safetensors` file. FP8 Flux2 `2kto4k` uses `pid_flux2_1024_to_4096_4step_mxfp8.safetensors`.
 
-Use the staged nodes when VRAM is tight:
+## Staged Workflow
+
+Use staged nodes when you want to separate latent preparation, native sampling, and final image conversion:
 
 ```text
 PiD KSampler Capture pid_latent -> PiD Prepare latent
@@ -89,198 +122,30 @@ PiD Sample                      -> PiD Finalize
 PiD Finalize image              -> Save Image
 ```
 
-Recommended Z-Image capture settings:
+Recommended capture settings are still workflow-dependent. Existing Z-Image, Flux2, SD3, SDXL, and Qwen capture workflows should continue to use the same capture node and sigma path.
+
+For Qwen-Image workflows, keep the diffusion model `UNETLoader` `weight_dtype` set to `default`. ComfyUI's `fp8_e4m3fn_fast` path can produce speckled Qwen latents before PiD runs; `PiD KSampler Capture` rejects that combination with a clear error.
+
+## Output Size Guide
 
 ```text
-steps = 50
-sampler_name = euler
-scheduler = flowmatch_euler_discrete
-flowmatch_shift = 3.0
-capture_step = 46
-```
-
-`flowmatch_euler_discrete` is the PiD node's built-in Diffusers-style FlowMatch Euler Discrete sigma schedule. NVIDIA's PiD `from_ldm` path loads the Hugging Face Diffusers backbone defaults, and Z-Image / Z-Image-Turbo ship a `FlowMatchEulerDiscreteScheduler` config with `shift=3.0`. `euler + beta` still remains available as a community/experimental ComfyUI setting, but it is not the exact official Diffusers-style schedule.
-
-`PiD KSampler Capture` now counts `capture_step` like NVIDIA's `save_xt_steps`: the number of completed LDM denoising passes. For example, `capture_step=46` captures the latent at `sigmas[46]`. If `capture_step` is equal to or greater than the effective sampler step count, the node returns the final clean latent with `sigma=0`.
-
-Suggested capture settings by backbone:
-
-| Backbone | LDM steps | Suggested capture | Recommended latent | Suggested KSampler combo |
-| --- | ---: | --- | --- | --- |
-| `flux`, `sd3` | 28 | 24 | captured latent | `euler` + `flowmatch_euler_discrete` |
-| `sdxl` | 30 | 26 | captured latent | `euler` + Comfy SDXL scheduler (`normal`/model default) |
-| `flux2` | 50 | 46 | captured latent | `euler` + `flowmatch_euler_discrete` |
-| `flux2-klein-4b`, `flux2-klein-9b` | 4 | 2 or 3 | final `x0` | `euler` + `flowmatch_euler_discrete` |
-| `qwenimage`, `qwenimage-2512` | 50 | 44 | captured latent | `euler` + `flowmatch_euler_discrete` |
-| `zimage` | 50 | 46 | captured latent | `euler` + `flowmatch_euler_discrete`, `flowmatch_shift=3.0` |
-| `zimage-turbo` | 9 | 7 optional | final `x0` | `euler` + `flowmatch_euler_discrete`, `flowmatch_shift=3.0` |
-
-For Qwen-Image workflows, keep the diffusion model `UNETLoader` `weight_dtype`
-set to `default`. ComfyUI's `fp8_e4m3fn_fast` path can produce speckled Qwen
-latents before PiD runs; `PiD KSampler Capture` rejects that combination with a
-clear error.
-
-`PiD Prepare` accepts only the PiD latent and caption as graph inputs; sigma comes from the captured latent when available or from the manual sigma widget.
-
-`PiD Sample` runs in a separate Python process, so its CUDA context is destroyed after the sample is finished.
-
-Use these PiD Sample settings for minimum VRAM:
-
-```text
-sequential_offload = auto_low_vram
-pid_weight_precision = fp32_compatible
-pixel_chunk_patches = 0
-```
-
-`auto_low_vram` chunks the large pixel-block AdaLN and MLP tensors while preserving
-one global attention pass. It also keeps full-image positional data in system RAM.
-At 4096x4096 output, the positional cache uses approximately 1 GiB of RAM.
-
-Available offload policies:
-
-| Value | Behavior |
-| --- | --- |
-| `auto_low_vram` | Default minimum-VRAM policy with automatic chunk sizing. |
-| `disabled` | Legacy upstream behavior without PiD block offload or chunking. |
-| `sequential_blocks` | Balanced exact-output block offload with chunked pixel work. |
-| `sequential_blocks_aggressive` | Preserved for older workflows; now uses the improved low-VRAM policy. |
-
-`pixel_chunk_patches=0` selects the chunk size automatically. A 16 GiB GPU uses
-`4096` patches for a 4K output.
-
-`pid_weight_precision=bf16_weights_experimental` casts PiD network weights after
-load for additional savings. It is not the default because output changes. In the
-4K synthetic comparison, mean absolute delta was `0.04556` and RMSE was `0.07943`
-against `fp32_compatible`.
-
-## Output size guide
-
-```text
-512x512 base  + 2k     + scale 4 -> 2048x2048
+512x512 base   + 2k     + scale 4 -> 2048x2048
 1024x1024 base + 2kto4k + scale 4 -> 4096x4096
 ```
 
 Large outputs can require a lot of VRAM. If a run fails, try:
-1. Lower `scale`.
-2. Use a smaller base latent.
-3. Keep cleanup options enabled.
-4. Keep `sequential_offload=auto_low_vram` and `pixel_chunk_patches=0`.
-5. Restart ComfyUI after CUDA allocator crashes.
 
-## PiD source and weights
+1. Use a smaller base latent.
+2. Keep cleanup options enabled.
+3. Use the staged workflow to free memory between prepare/sample/finalize.
+4. Restart ComfyUI after CUDA allocator crashes.
 
-By default, the NVIDIA PiD source checkout lives under the custom node:
+## Offline Setup
 
-```text
-ComfyUI/custom_nodes/ComfyUI-PiD/vendor/PiD
-```
-
-Downloaded weights and assets live in ComfyUI's shared models directory:
-
-```text
-ComfyUI/models/nvidia_pid/checkpoints
-```
-
-You can override the PiD source location with:
-- the `pid_source_dir` node input
-- `PID_REPO_DIR`
-- `COMFYUI_PID_REPO_DIR`
-
-These overrides affect the source checkout only. Weights and assets continue to
-use `ComfyUI/models/nvidia_pid/checkpoints`.
-
-When `auto_download=true`, the node downloads missing PiD source, checkpoints,
-and assets as needed. Existing weights from older versions under
-`vendor/PiD/checkpoints` are moved into the shared models directory on first use.
-
-## Offline setup
-
-PiD can run without internet after its source and Python dependencies are
-installed and the required models are available locally. The common offline
-layout is:
-
-```text
-ComfyUI/models/nvidia_pid/
-  checkpoints/
-    sdxl_vae.safetensors                         # sdxl backbone only
-    QwenImage_VAE_2d.pth                         # qwenimage backbones only
-  huggingface/
-    Efficient-Large-Model/gemma-2-2b-it/
-    facebook/dinov2-with-registers-base/        # dinov2 backbone only
-    google/siglip2-so400m-patch14-224/          # siglip backbone only
-```
-
-The Gemma snapshot is required for every PiD decode. The SDXL/Qwen VAE files,
-DINOv2 snapshot, and SigLIP snapshot are only required when their matching
-backbones are selected.
-
-To prepare an offline installation manually, clone NVIDIA's source while online
-and download the required models:
+For offline use, download the needed files while online:
 
 ```bash
-git clone --depth 1 https://github.com/nv-tlabs/PiD.git ComfyUI/custom_nodes/ComfyUI-PiD/vendor/PiD
-hf download nvidia/PiD --local-dir ComfyUI/models/nvidia_pid --include "checkpoints/*"
-hf download Efficient-Large-Model/gemma-2-2b-it --local-dir ComfyUI/models/nvidia_pid/huggingface/Efficient-Large-Model/gemma-2-2b-it --exclude "gemma-2-2b-it.safetensors"
-hf download facebook/dinov2-with-registers-base --local-dir ComfyUI/models/nvidia_pid/huggingface/facebook/dinov2-with-registers-base
-hf download google/siglip2-so400m-patch14-224 --local-dir ComfyUI/models/nvidia_pid/huggingface/google/siglip2-so400m-patch14-224
+hf download Comfy-Org/PixelDiT --local-dir ComfyUI/models --include "diffusion_models/pid_*_bf16.safetensors" "diffusion_models/pid_*_mxfp8.safetensors" "text_encoders/gemma_2_2b_it_elm_bf16.safetensors" "text_encoders/gemma_2_2b_it_elm_fp8_scaled.safetensors"
 ```
 
-The final two commands are optional unless you use their backbones.
-`auto_download=false` enables strict local-only mode and reports any missing
-files. With `auto_download=true`, existing complete local folders are used
-without network calls; missing snapshots are downloaded lazily.
-
-## Notes
-
-- This is a community wrapper around NVIDIA's public PiD code, not an official NVIDIA or ComfyUI project.
-- PiD outputs `IMAGE`, not a ComfyUI `VAE`; no separate image-conditioning input is required for the supported latent-conditioned checkpoints.
-- NVIDIA's PiD weights may have separate license/usage terms. Check the model card before commercial use.
-- Final latents with `sigma=0.0` can work. For Z-Image-Turbo and Flux2-Klein, final `x0` is the recommended latent; for normal Z-Image / Flux2 / Qwen-Image, captured intermediate latents usually better match the official PiD recipe.
-- SDXL captured latents are automatically converted from Comfy/k-diffusion's variance-exploding frame to the VP frame expected by PiD.
-
-## PiD Empty Latent Image
-
-`PiD Empty Latent Image` is a lightweight preset wrapper for PiD-friendly base resolutions.
-It intentionally mirrors `EmptySD3LatentImage` output and creates SD3-style empty latents with shape:
-
-```
-[batch, 16, height / 8, width / 8]
-```
-
-It does **not** expose a backbone selector. The node only provides the `2k` / `2kto4k` switch, a dynamic resolution preset list, and `batch_size`. Backbone selection stays in the PiD processing nodes.
-
-## Example workflows
-
-Complete backbone-specific workflows are included in `example_workflows/`. They include the generation side plus PiD decode side: model loader, text encoder loader, prompt encode, empty latent, `PiD KSampler Capture`, `PiD Prepare`, `PiD Sample`, `PiD Finalize`, and `Save Image`.
-
-Included complete workflows:
-
-```
-pid_flux_complete.json
-pid_flux2_complete.json
-pid_flux2_klein_4b_complete.json
-pid_flux2_klein_9b_complete.json
-pid_qwenimage_complete.json
-pid_qwenimage_2512_complete.json
-pid_sd3_complete.json
-pid_sdxl_complete.json
-pid_zimage_complete.json
-pid_zimage_turbo_complete.json
-pid_image_to_image_2k_complete.json
-pid_image_to_image_2kto4k_complete.json
-```
-
-DINOv2 and SigLIP are intentionally not included as complete ComfyUI text-to-image workflows because their upstream RAE / Scale-RAE LDM paths are not normal Diffusers-style ComfyUI generation graphs.
-
-These workflows output PiD images directly; no VAE baseline image is used.
-
-
-Additional clean-image workflows are also included:
-- `pid_image_to_image_2k_complete.json`
-- `pid_image_to_image_2kto4k_complete.json`
-
-These use `LoadImage -> ResizeImagesByLongerEdge -> VAEEncode -> PiDPrepare -> PiDSample -> PiDFinalize`.
-
-## License
-
-This project is released under the MIT License.
+Place the downloaded diffusion files under `models/diffusion_models/nvidia_pid` and the text encoder under `models/text_encoders/nvidia_pid`, then set `auto_download=false`.

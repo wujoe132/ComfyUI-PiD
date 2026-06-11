@@ -389,8 +389,8 @@
         4,
         0.0,
         true,
-        true,
-        ""
+        "bf16",
+        true
       ]
     },
     {
@@ -433,10 +433,7 @@
         1.0,
         0,
         "randomize",
-        true,
-        "auto_low_vram",
-        "fp32_compatible",
-        0
+        true
       ]
     },
     {
