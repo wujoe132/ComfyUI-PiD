@@ -637,21 +637,12 @@ def _format_pid_runtime_error(
     return PiDNodeError(f"Native PiD inference failed. Original error: {msg}")
 
 
-def _run_native_pid_decode(
+def _resolve_native_pid_paths(
     spec: NativePiDModelSpec,
-    caption: str,
-    latent_cpu: torch.Tensor,
-    sigma: float,
-    infer_image_size: Tuple[int, int],
-    pid_steps: int,
-    cfg_scale: float,
-    seed: int,
-    *,
     allow_download: bool = True,
     diffusion_model_path: Optional[Path] = None,
     text_encoder_path: Optional[Path] = None,
-    progress_callback: Optional[Callable[[int, int], None]] = None,
-):
+) -> Tuple[Path, Path]:
     _require_comfy()
     if diffusion_model_path and text_encoder_path:
         diffusion_path = Path(diffusion_model_path)
@@ -666,14 +657,61 @@ def _run_native_pid_decode(
             diffusion_path = Path(diffusion_model_path)
         if text_encoder_path:
             text_path = Path(text_encoder_path)
+    return diffusion_path, text_path
 
-    model = None
-    clip = None
-    try:
-        model = _load_native_pid_model(diffusion_path)
-        clip = _load_pixeldit_clip(text_path)
-        positive = _encode_pixeldit_conditioning(clip, caption or "")
-        negative = _encode_pixeldit_conditioning(clip, "")
+
+class _NativePiDSession:
+    """Loaded native PiD model pair that can sample multiple tiles."""
+
+    def __init__(self, spec: NativePiDModelSpec, diffusion_path: Path, text_encoder_path: Path):
+        self.spec = spec
+        self.diffusion_path = Path(diffusion_path)
+        self.text_encoder_path = Path(text_encoder_path)
+        self.model = _load_native_pid_model(self.diffusion_path)
+        self.clip = _load_pixeldit_clip(self.text_encoder_path)
+
+    @classmethod
+    def create(
+        cls,
+        spec: NativePiDModelSpec,
+        *,
+        allow_download: bool = True,
+        diffusion_model_path: Optional[Path] = None,
+        text_encoder_path: Optional[Path] = None,
+    ) -> "_NativePiDSession":
+        diffusion_path, text_path = _resolve_native_pid_paths(
+            spec,
+            allow_download=allow_download,
+            diffusion_model_path=diffusion_model_path,
+            text_encoder_path=text_encoder_path,
+        )
+        return cls(spec, diffusion_path, text_path)
+
+    def close(self) -> None:
+        self.clip = None
+        self.model = None
+        _free_cuda_memory(aggressive=True)
+
+    def __enter__(self) -> "_NativePiDSession":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        del exc_type, exc, tb
+        self.close()
+
+    def sample(
+        self,
+        caption: str,
+        latent_cpu: torch.Tensor,
+        sigma: float,
+        infer_image_size: Tuple[int, int],
+        pid_steps: int,
+        cfg_scale: float,
+        seed: int,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> torch.Tensor:
+        positive = _encode_pixeldit_conditioning(self.clip, caption or "")
+        negative = _encode_pixeldit_conditioning(self.clip, "")
         positive = _apply_pid_conditioning(positive, latent_cpu, sigma)
         negative = _apply_pid_conditioning(negative, latent_cpu, sigma)
 
@@ -693,7 +731,7 @@ def _run_native_pid_decode(
 
         with torch.inference_mode():
             samples = _sample_native_pid_student_sde(
-                model,
+                self.model,
                 noise,
                 total_steps,
                 float(cfg_scale),
@@ -707,10 +745,39 @@ def _run_native_pid_decode(
         if progress_callback is not None:
             progress_callback(total_steps, total_steps)
         return samples.detach()
-    finally:
-        del clip
-        del model
-        _free_cuda_memory(aggressive=True)
+
+
+def _run_native_pid_decode(
+    spec: NativePiDModelSpec,
+    caption: str,
+    latent_cpu: torch.Tensor,
+    sigma: float,
+    infer_image_size: Tuple[int, int],
+    pid_steps: int,
+    cfg_scale: float,
+    seed: int,
+    *,
+    allow_download: bool = True,
+    diffusion_model_path: Optional[Path] = None,
+    text_encoder_path: Optional[Path] = None,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+):
+    with _NativePiDSession.create(
+        spec,
+        allow_download=allow_download,
+        diffusion_model_path=diffusion_model_path,
+        text_encoder_path=text_encoder_path,
+    ) as session:
+        return session.sample(
+            caption,
+            latent_cpu,
+            sigma,
+            infer_image_size,
+            pid_steps,
+            cfg_scale,
+            seed,
+            progress_callback=progress_callback,
+        )
 
 
 def _native_pixel_to_comfy_image(image: torch.Tensor) -> torch.Tensor:

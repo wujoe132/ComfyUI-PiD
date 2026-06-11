@@ -99,6 +99,7 @@ For compatibility with the original NVIDIA PiD nodes, captured low-quality laten
 | **PiD Sample** | Runs native PiD sampling in-process from prepared CPU latent data. |
 | **PiD Finalize** | Converts native PiD pixel output to ComfyUI `IMAGE`. |
 | **PiD Empty Latent Image** | Creates PiD-friendly SD3-style empty latents from base-resolution presets. |
+| **PiD Upscale** | Image-only tiled PiD upscaler with 2x/4x/6x/8x output factors. |
 
 ## Supported Backbones
 
@@ -173,6 +174,10 @@ For Qwen-Image workflows, keep the diffusion model `UNETLoader` `weight_dtype` s
 512x512 base   + 2k     + scale 4 -> 2048x2048
 1024x1024 base + 2kto4k + scale 4 -> 4096x4096
 ```
+
+`PiD Upscale` always uses the native 2K/512px PiD checkpoint at its trained 4x scale. It tiles normal images into 512px tiles, stitches the 4x PiD tiles, then Lanczos-resizes to the selected output factor. Images below 512px on their longest edge are first resized near 512px, PiD-upscaled once, then tiled and PiD-upscaled again before the final Lanczos resize.
+
+The upscaler exposes only one graph input (`IMAGE`) and one graph output (`IMAGE`). Backbone, auto-download, precision, output factor, and strength are widgets. Strength maps to PiD detail regeneration sigma: `off=0.0`, `low=0.2`, `medium=0.4`, `high=0.6`. SDXL and Qwen backbones are intentionally excluded because the native model set only provides them as `2kto4k` checkpoints.
 
 Large outputs can require a lot of VRAM. If a run fails, try:
 
