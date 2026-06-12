@@ -65,18 +65,132 @@ function installResolutionSwitcher(node) {
     requestAnimationFrame(updateResolutionChoices);
 }
 
+function installUpscaleStrengthReset(node) {
+    const strengthWidget = node.widgets?.find((widget) => widget.name === "strength");
+    if (!strengthWidget || strengthWidget.__pidStrengthResetInstalled) {
+        return;
+    }
+
+    strengthWidget.__pidStrengthResetInstalled = true;
+
+    const resetStrengthToNumber = () => {
+        const value = Number(strengthWidget.value);
+        if (!Number.isFinite(value)) {
+            strengthWidget.value = 0.4;
+        } else {
+            strengthWidget.value = Math.min(1, Math.max(0, Math.round(value * 10) / 10));
+        }
+        node.setDirtyCanvas(true, true);
+    };
+
+    requestAnimationFrame(resetStrengthToNumber);
+}
+
+function installUpscaleDefaultReset(node) {
+    const widgets = Object.fromEntries((node.widgets ?? []).map((widget) => [widget.name, widget]));
+    const requiredNames = ["pid_ckpt_type", "backbone", "auto_download", "model_precision", "upscale_factor", "strength"];
+    if (requiredNames.some((name) => !widgets[name]) || node.__pidUpscaleDefaultResetInstalled) {
+        return;
+    }
+
+    node.__pidUpscaleDefaultResetInstalled = true;
+
+    const valid = {
+        pid_ckpt_type: new Set(["2k", "2kto4k"]),
+        backbone: new Set(["zimage", "zimage-turbo", "flux", "flux2", "flux2-klein-4b", "flux2-klein-9b", "sd3"]),
+        model_precision: new Set(["bf16", "fp8"]),
+        upscale_factor: new Set(["2x", "4x", "6x", "8x"]),
+    };
+
+    const resetInvalidValues = () => {
+        let changed = false;
+        if (!valid.pid_ckpt_type.has(widgets.pid_ckpt_type.value)) {
+            widgets.pid_ckpt_type.value = "2k";
+            changed = true;
+        }
+        if (!valid.backbone.has(widgets.backbone.value)) {
+            widgets.backbone.value = "flux";
+            changed = true;
+        }
+        if (typeof widgets.auto_download.value !== "boolean") {
+            widgets.auto_download.value = true;
+            changed = true;
+        }
+        if (!valid.model_precision.has(widgets.model_precision.value)) {
+            widgets.model_precision.value = "bf16";
+            changed = true;
+        }
+        if (!valid.upscale_factor.has(widgets.upscale_factor.value)) {
+            widgets.upscale_factor.value = "4x";
+            changed = true;
+        }
+        const strength = Number(widgets.strength.value);
+        if (!Number.isFinite(strength) || strength < 0 || strength > 1) {
+            widgets.strength.value = 0.4;
+            changed = true;
+        }
+        if (changed) {
+            node.setDirtyCanvas(true, true);
+        }
+    };
+
+    requestAnimationFrame(resetInvalidValues);
+}
+
+function installCaptionPreview(node) {
+    const previewWidget = node.widgets?.find((widget) => widget.name === "preview");
+    if (!previewWidget || previewWidget.__pidCaptionPreviewInstalled) {
+        return;
+    }
+
+    previewWidget.__pidCaptionPreviewInstalled = true;
+    previewWidget.inputEl?.setAttribute?.("readonly", "readonly");
+    previewWidget.inputEl?.setAttribute?.("disabled", "disabled");
+    previewWidget.options = previewWidget.options ?? {};
+    previewWidget.options.readonly = true;
+}
+
 app.registerExtension({
-    name: "ComfyUI-PiD.EmptyLatentImage",
+    name: "ComfyUI-PiD.Widgets",
     beforeRegisterNodeDef(nodeType, nodeData) {
-        if (nodeData.name !== "PiDEmptyLatentImage") {
-            return;
+        if (nodeData.name === "PiDEmptyLatentImage") {
+            const onNodeCreated = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function pidEmptyLatentOnNodeCreated(...args) {
+                const result = onNodeCreated?.apply(this, args);
+                installResolutionSwitcher(this);
+                return result;
+            };
         }
 
-        const onNodeCreated = nodeType.prototype.onNodeCreated;
-        nodeType.prototype.onNodeCreated = function pidEmptyLatentOnNodeCreated(...args) {
-            const result = onNodeCreated?.apply(this, args);
-            installResolutionSwitcher(this);
-            return result;
-        };
+        if (nodeData.name === "PiDUpscale") {
+            const onNodeCreated = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function pidUpscaleOnNodeCreated(...args) {
+                const result = onNodeCreated?.apply(this, args);
+                installUpscaleDefaultReset(this);
+                installUpscaleStrengthReset(this);
+                return result;
+            };
+        }
+
+        if (nodeData.name === "PiDCaptionCreator") {
+            const onNodeCreated = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function pidCaptionCreatorOnNodeCreated(...args) {
+                const result = onNodeCreated?.apply(this, args);
+                installCaptionPreview(this);
+                return result;
+            };
+
+            const onExecuted = nodeType.prototype.onExecuted;
+            nodeType.prototype.onExecuted = function pidCaptionCreatorOnExecuted(message, ...args) {
+                const result = onExecuted?.apply(this, [message, ...args]);
+                const previewWidget = this.widgets?.find((widget) => widget.name === "preview");
+                const text = message?.text?.[0] ?? message?.caption?.[0];
+                if (previewWidget && text !== undefined) {
+                    previewWidget.value = String(text);
+                    this.setDirtyCanvas(true, true);
+                }
+                return result;
+            };
+        }
     },
 });
