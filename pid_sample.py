@@ -55,7 +55,7 @@ class PiDSample:
                 "prepared": (PID_PREP_TYPE,),
                 "pid_steps": ("INT", {"default": 4, "min": 1, "max": 64, "step": 1}),
                 "cfg_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 20.0, "step": 0.1}),
-                "seed": ("INT", {"default": 0, "min": 0, "max": 2**31 - 1}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 2**63 - 1}),
                 "aggressive_cleanup": ("BOOLEAN", {"default": True}),
             }
         }
